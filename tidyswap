@@ -64,7 +64,6 @@ for swapFilePath in ${swapFilePaths}; do
     fi
     swapFileInfo=$(ls -lT $swapFilePath | tr -s " " | cut -d " " -f 6-10)
 
-    echo "-----"
     if [[ "$forceDelete" == "y" ]]; then
         $deleter $swapFilePath
     elif [[ "$deleteOld" == "y" ]]; then
@@ -75,8 +74,9 @@ for swapFilePath in ${swapFilePaths}; do
             $deleter $swapFilePath
         fi
     else
+        echo "-----"
         if ! test -f "$mainFilePath"; then
-            echo "Zombie swap file: $swapFilePath"
+            echo "Zombie swap file:"
         else
             echo $mainFileInfo
         fi
