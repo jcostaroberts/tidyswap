@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+
+usage() {
+    cat <<EOM
+usage: $0 [--rm-old] [--force-rm] [--help] [--path PATH] [--trash]
+
+Identify and delete Vim swap files.
+
+Options:
+--rm-old       (-o)      If a file is newer than its swap file, delete the swap file
+--force-rm     (-f)      Delete all swapfiles under the indicated path
+--help         (-h)      Display help
+--path         (-p)      Path under which to search recursively for swap files (required)
+--trash        (-t)      Move files to trash rather than delete them
+EOM
+}
+
+deleteOld=n
+forceDelete=n
+path='.'
+deleter="rm"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -o|--rm-old)
+            deleteOld=y
+            shift;;
+        -f|--force-rm)
+            forceDelete=y
+            shift;;
+        -h|--help)
+            usage
+            exit 0;;
+        -p|--path)
+            if [ $# -eq 1 ]
+            then
+                echo "--path requires a path parameter"
+                exit 1
+            fi
+            path=$2
+            shift 2;;
+        -t|--trash)
+            deleter="trash"
+            shift;;
+        --)
+            shift
+            break;;
+        *)
+            echo "Unknown argument '$1'"
+            usage
+            exit 1;;
+    esac
+done
+
+swapFilePaths=$(find $path -type f -name "*.sw[klmnop]")
+
+for swapFilePath in ${swapFilePaths}; do
+    swapFile=$(basename $swapFilePath)
+    mainFile=$(echo $swapFile | sed "s|.\(.*\).sw[klmnop]|\1|")
+    mainFilePath="$(dirname $swapFilePath)/$mainFile"
+    mainFileInfo=""
+    if test -f "$mainFilePath"; then
+        mainFileInfo=$(ls -lT $mainFilePath | tr -s " " | cut -d " " -f 6-10)
+    fi
+    swapFileInfo=$(ls -lT $swapFilePath | tr -s " " | cut -d " " -f 6-10)
+
+    echo "-----"
+    if [[ "$forceDelete" == "y" ]]; then
+        $deleter $swapFilePath
+    elif [[ "$deleteOld" == "y" ]]; then
+        if ! test -f "$mainFilePath"; then
+            echo "Not deleting zombie swap file: $swapFilePath"
+        elif [[ "$swapFilePath" -ot "$mainFilePath" ]]; then
+            echo "older: $swapFilePath"
+            $deleter $swapFilePath
+        fi
+    else
+        if ! test -f "$mainFilePath"; then
+            echo "Zombie swap file: $swapFilePath"
+        else
+            echo $mainFileInfo
+        fi
+        echo $swapFileInfo
+        while true; do
+            read -p "Delete swap file? (y/n) " dl
+            case $dl in
+                y)
+                    $deleter $swapFilePath
+                    break;;
+                n)
+                    break;;
+                *)
+                    ;;
+            esac
+        done
+    fi
+done
