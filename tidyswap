@@ -2,14 +2,15 @@
 
 usage() {
     cat <<EOM
-usage: $0 [--rm-old] [--force-rm] [--help] [--path PATH] [--trash]
+usage: $0 [--rm-old] [--force-rm] [--diff] [--help] [--path PATH] [--trash]
 
 Identify and delete Vim swap files.
 
 Options:
---rm-old       (-o)      If a file is newer than its swap file, delete the swap file
+--diff         (-d)      For a current swap file, check whether it contains any diff on the target file. If not, delete it; if so, ask user what to do.
 --force-rm     (-f)      Delete all swapfiles under the indicated path
 --help         (-h)      Display help
+--rm-old       (-o)      If a file is newer than its swap file, delete the swap file
 --path         (-p)      Path under which to search recursively for swap files (required)
 --trash        (-t)      Move files to trash rather than delete them
 EOM
@@ -19,11 +20,12 @@ deleteOld=n
 forceDelete=n
 path='.'
 deleter="rm"
+diff=n
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -o|--rm-old)
-            deleteOld=y
+        -d|--diff)
+            diff=y
             shift;;
         -f|--force-rm)
             forceDelete=y
@@ -31,6 +33,9 @@ while [[ $# -gt 0 ]]; do
         -h|--help)
             usage
             exit 0;;
+        -o|--rm-old)
+            deleteOld=y
+            shift;;
         -p|--path)
             if [ $# -eq 1 ]
             then
@@ -52,6 +57,71 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+deleteFile () {
+    local file=$1
+    local msg=${2:-""}
+    if [ ! -z "$msg" ]; then
+        echo "$msg"
+    fi
+    $deleter $file
+}
+
+maybeDeleteFile () {
+    local file=$1
+    local desc=${2:-"$file"}
+    read -p "Delete $desc (y/n): " dl
+    while true; do
+        case $dl in
+            y)
+                $deleter $file
+                break;;
+            n)
+                break;;
+            *)
+                ;;
+        esac
+    done
+}
+
+diffSwap () {
+    local sfp=$1
+    local mfp=$2
+    local scratchFile="/tmp/vim_swap_scratch.txt"
+    if test -f "$scratchFile"; then
+        rm $scratchFile
+    fi
+    vim -u /dev/null --noplugin -r "$sfp" -c ":wq $scratchFile"
+    if cmp -s "$mfp" "$scratchFile"; then
+        deleteFile $sfp "deleting file $sfp"
+        return
+    fi
+    local nlines=100
+    echo "Target file $mfp differs from recovered file. First $nlines lines of diff:"
+    diff "$mfp" "$scratchFile" | head -n $nlines
+    echo "Options:"
+    echo "r: Recover using this swap file, save the recovered file as the base file, and delete the swap file"
+    echo "k: Keep the base file and delete the swap file"
+    echo "n: Take no action"
+    while true; do
+        read -p "Specify an action (r/k/n): " rkn
+        case $rkn in
+            r)
+                cp "$mfp" /tmp/copy.wiki
+                $deleter "$mfp"
+                mv "$scratchFile" "$mfp"
+                $deleter "$sfp"
+                break;;
+            k)
+                $deleter "$sfp"
+                break;;
+            n)
+                break;;
+            *)
+                ;;
+        esac
+    done
+}
+
 swapFilePaths=$(find $path -type f -name "*.sw[klmnop]")
 
 for swapFilePath in ${swapFilePaths}; do
@@ -63,35 +133,31 @@ for swapFilePath in ${swapFilePaths}; do
         mainFileInfo=$(ls -lT $mainFilePath | tr -s " " | cut -d " " -f 6-10)
     fi
     swapFileInfo=$(ls -lT $swapFilePath | tr -s " " | cut -d " " -f 6-10)
+    echo "-----"
 
+    # If --force-rm is set, delete the swap file and move on.
     if [[ "$forceDelete" == "y" ]]; then
-        $deleter $swapFilePath
-    elif [[ "$deleteOld" == "y" ]]; then
-        if ! test -f "$mainFilePath"; then
-            echo "Not deleting zombie swap file: $swapFilePath"
-        elif [[ "$swapFilePath" -ot "$mainFilePath" ]]; then
-            echo "older: $swapFilePath"
-            $deleter $swapFilePath
-        fi
+        deleteFile $swapFilePath
+        continue
+    fi
+
+    # If this swap file is an orphan, ask the user whether to delete it.
+    if ! test -f "$mainFilePath"; then
+        maybeDeleteFile $swapFilePath "orphaned swap file $swapFilePath"
+    # If --rm-old is set, and this swap file is old than its base file, delete
+    # the dwap file and move on.
+    elif [[ "$deleteOld" == "y" && "$swapFilePath" -ot "$mainFilePath" ]]; then
+        deleteFile $swapFilePath "Deleting old swap file: $swapFilePath"
+    # If the --diff option is set, check whether this swap file contains any
+    # change on top of the base file. If not, delete the swap file. If so, ask
+    # the user what to do.
+    elif [[ "$diff" == "y" ]]; then
+        diffSwap $swapFilePath $mainFilePath
+    # None of the other options apply. Print the base file and swap file info
+    # and ask the user whether to delete the swap file.
     else
-        echo "-----"
-        if ! test -f "$mainFilePath"; then
-            echo "Zombie swap file:"
-        else
-            echo $mainFileInfo
-        fi
+        echo $mainFileInfo
         echo $swapFileInfo
-        while true; do
-            read -p "Delete swap file? (y/n) " dl
-            case $dl in
-                y)
-                    $deleter $swapFilePath
-                    break;;
-                n)
-                    break;;
-                *)
-                    ;;
-            esac
-        done
+        maybeDeleteFile $swapFilePath "current swap file $swapFilePath"
     fi
 done
